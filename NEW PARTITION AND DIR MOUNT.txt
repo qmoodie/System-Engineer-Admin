@@ -1,0 +1,45 @@
+#CHECK STORAGE 
+lsblk
+
+Step 2: Create a New Partition
+#Use parted to create a new partition. Replace /dev/sdx with the device identifier from the previous step (e.g., /dev/sda):
+sudo parted /dev/sdx
+
+Inside the parted tool, follow these sub-steps:
+
+Print the existing partition table: print
+Create a primary partition:
+  mkpart primary xfs 1MiB 1001MiB
+#Adjust 1MiB 1001MiB to the start and end points based on the available space. For example, if you have 1 GB free, you might use 1MiB 1001MiB.
+
+Step 3: Format the New Partition
+#Once the partition is created, format it with the XFS file system 
+sudo mkfs.xfs /dev/sdx1
+#Replace /dev/sdx1 with the actual partition identifier.
+
+
+Step 4: Create Mount Point
+#Create a new directory where you will mount the new partition:
+  sudo mkdir /mnt/newpartition
+#Replace /mnt/newpartition with your desired path.
+
+
+Step 5: Mount the Partition
+#Mount the new partition to the directory you just created:
+  sudo mount /dev/sdx1 /mnt/newpartition
+
+
+Step 6: Ensure Permanent Mounting
+#Open /etc/fstab in a text editor:
+  sudo vi /etc/fstab
+    /dev/sdx1 /mnt/newpartition xfs defaults 0 0
+#Replace /dev/sdx1 and /mnt/newpartition with the correct partition identifier and mount point.
+
+Step 7: Verify Everything Works
+#Finally, verify that everything is set up correctly:
+  df -h
+
+
+
+
+

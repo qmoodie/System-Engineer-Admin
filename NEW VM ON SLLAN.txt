@@ -1,0 +1,39 @@
+vSphere
+  Deploy Template 
+    -specify hardware req based on use
+    - disable disk option 
+     -set to client device 
+
+Chnage hostname 
+  - hostnamectl set-hostname [hostname]
+  - reboot 
+  - verify prompt changed 
+
+Change IP 
+  - nmcli connection modify [adapter] ipv4.address [ip/CIDR]
+  - nmcli connection modfy [adapter] ipv4.gateway [gateway]
+
+Add to ansible host file 
+  - gitlab/hosts/edit file
+  - find proper os/add to local auth 
+  - move from local auth after added to ad and sec tools have been added 
+
+Remote to DC to add DNS entry 
+  - remote desktop (d9coreaddc01)
+  - win+r mmc
+  - add DNS snap in 
+  - nav to dns/d9/div9.sllan
+  - right click/new hosts (a or aaa
+  - enter host name and ip 
+  - check create ass. PIR
+  - ok 
+
+Add to sat server 
+  - same as on llan 
+
+Run Ansible playbook 
+  - same on llan 
+    - make sure pw is set to default pw (break)
+  - run join-ad/nessus/trellix,splunk
+
+dnf update 
