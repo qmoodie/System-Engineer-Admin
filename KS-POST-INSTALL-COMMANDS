@@ -1,0 +1,605 @@
+#!/bin/bash
+
+
+
+
+# V-258046 - Disable interactive login shells for system accounts
+for account in systemd-oom shutdown libstoragemgmt setroubleshoot clevis sync halt; do
+    if id "$account" &>/dev/null; then
+        echo "Disabling interactive login shell for $account"
+        usermod --shell /sbin/nologin "$account"
+    else
+        echo "User $account does not exist"
+    fi
+done
+
+#MODPROBE.D
+# Function to amend or create modprobe configuration file
+amend_or_create_modprobe_file() {
+  local filename="$1"
+  local content="$2"
+
+  if [ -f "$filename" ]; then
+    echo "$filename exists. Amending it..."
+    echo "$content" > "$filename"
+  else
+    echo "$filename does not exist. Creating it..."
+    echo "$content" > "$filename"
+  fi
+}
+
+# V-257804 - Disable the Asynchronous Transfer Mode (ATM) kernel module
+amend_or_create_modprobe_file "/etc/modprobe.d/atm.conf" "# Disable per security requirements
+install atm /bin/false
+blacklist atm"
+
+# V-257806 - Disable the FireWire kernel module
+amend_or_create_modprobe_file "/etc/modprobe.d/firewire-core.conf" "# Disable per security requirements
+install firewire-core /bin/false
+blacklist firewire-core"
+
+# V-257807 - Disable the Stream Control Transmission Protocol (SCTP) kernel module
+amend_or_create_modprobe_file "/etc/modprobe.d/sctp.conf" "# Disable per security requirements
+install sctp /bin/false
+blacklist sctp"
+
+# V-257808 - Disable the Transparent Inter Process Communication (TIPC) kernel module
+amend_or_create_modprobe_file "/etc/modprobe.d/tipc.conf" "# Disable per security requirements
+install tipc /bin/false
+blacklist tipc"
+
+# V-257880 - Disable mounting of cramfs
+CRAMFS_CONF="/etc/modprobe.d/cramfs.conf"
+BLACKLIST_CONF="/etc/modprobe.d/blacklist.conf"
+amend_or_create_modprobe_file "$CRAMFS_CONF" "# Disable per security requirements
+install cramfs /bin/false
+blacklist cramfs"
+
+# Rename cramfs.conf to blacklist.conf if it exists
+if [ -f "$CRAMFS_CONF" ]; then
+  echo "Renaming $CRAMFS_CONF to $BLACKLIST_CONF..."
+  mv "$CRAMFS_CONF" "$BLACKLIST_CONF"
+fi
+
+# V-258039 - Disable Bluetooth
+amend_or_create_modprobe_file "/etc/modprobe.d/bluetooth.conf" "# Disable per security requirements
+install bluetooth /bin/false
+blacklist bluetooth"
+
+# V-258034 - Disable USB mass storage
+amend_or_create_modprobe_file "/etc/modprobe.d/usb-storage.conf" "# Disable per security requirements
+install usb-storage /bin/false
+blacklist usb-storage"
+
+echo "Modprobe configuration updates completed."
+
+
+
+#YAMA CONF
+YAMA_CONF="/lib/sysctl.d/10-default-yama-scope.conf"
+YAMA_SETTING="kernel.yama.ptrace_scope = 1"
+
+#  Function to add or update the Yama configuration
+    add_or_update_yama_scope() {
+  local filename="$1"
+  local setting="$2"
+
+  if [ -f "$filename" ]; then
+    echo "$filename exists. Checking for existing setting..."
+    if grep -q "^kernel.yama.ptrace_scope =" "$filename"; then
+      echo "Existing setting found. Updating it..."
+      sed -i "s/^kernel.yama.ptrace_scope =.*/$setting/" "$filename"
+    else
+      echo "No existing setting found. Adding new setting..."
+      echo "$setting" >> "$filename"
+    fi
+  else
+    echo "$filename does not exist. Creating and adding setting..."
+    echo "$setting" > "$filename"
+  fi
+}
+
+# Add or update the Yama ptrace scope setting
+add_or_update_yama_scope "$YAMA_CONF" "$YAMA_SETTING"
+
+# Apply the sysctl settings
+echo "Restarting sysctl..."
+sysctl --system
+
+echo "Yama ptrace scope configuration updated and sysctl settings applied."
+
+
+
+#NETWORK MANAGER
+NM_CONF="/etc/NetworkManager/NetworkManager.conf"
+PLUGINS_STRING="#plugins=keyfile,ifcfg-rh"
+PREVIOUS_STRING="# the previous one"
+MAIN_SECTION="[main]"
+DNS_SETTING="dns=none"
+
+# Function to update NetworkManager.conf
+update_network_manager_conf() {
+  local conf_file="$1"
+
+  # Check if the file exists
+  if [ -f "$conf_file" ]; then
+    echo "$conf_file exists. Updating it..."
+    
+    # Handle plugins string placement
+    if grep -q "^$PLUGINS_STRING" "$conf_file"; then
+      echo "Found plugins string: $PLUGINS_STRING"
+      # Remove existing plugins string and re-add it under the previous comment
+      sed -i "/^$PLUGINS_STRING/d" "$conf_file"
+      sed -i "/^$PREVIOUS_STRING/a $PLUGINS_STRING" "$conf_file"
+    else
+      echo "$PLUGINS_STRING not found. Adding under $PREVIOUS_STRING"
+      sed -i "/^$PREVIOUS_STRING/a $PLUGINS_STRING" "$conf_file"
+    fi
+
+    # Handle [main] section and dns setting
+    if grep -q "^\[main\]" "$conf_file"; then
+      echo "Found [main] section. Checking for dns setting..."
+      if grep -q "^dns=none" "$conf_file"; then
+        echo "dns=none is already present under [main]"
+      else
+        echo "Adding dns=none under [main]"
+        sed -i '/^\[main\]/a dns=none' "$conf_file"
+      fi
+    else
+      echo "Adding [main] section with dns=none"
+      echo -e "\n[main]" >> "$conf_file"
+      echo "dns=none" >> "$conf_file"
+    fi
+  else
+    echo "$conf_file does not exist. Creating it..."
+    echo "[main]" > "$conf_file"
+    echo "dns=none" >> "$conf_file"
+    echo "# the previous one" >> "$conf_file"
+    echo "$PLUGINS_STRING" >> "$conf_file"
+  fi
+}
+
+# Update the NetworkManager configuration
+update_network_manager_conf "$NM_CONF"
+
+# Reload Network Manager
+echo "Reloading NetworkManager..."
+systemctl reload NetworkManager
+
+echo "NetworkManager configuration updated and reloaded."
+
+
+
+#99SYSCTL
+SYSCTL_CONF="/etc/sysctl.d/99-sysctl.conf"
+
+# Function to append configuration if the string is not already present
+append_if_absent() {
+  local conf_file="$1"
+  local search_string="$2"
+  local append_string="$3"
+
+  if grep -qF "$search_string" "$conf_file"; then
+    echo "Found \"$search_string\" in $conf_file"
+  else
+    echo "Appending \"$append_string\" to $conf_file"
+    echo "$append_string" >> "$conf_file"
+  fi
+}
+
+# Create or update the sysctl configuration
+update_sysctl_conf() {
+  local conf_file="$1"
+
+  # Ensure the file exists
+  if [ ! -f "$conf_file" ]; then
+    echo "$conf_file does not exist. Creating it..."
+    touch "$conf_file"
+  fi
+
+  # V-257960 - Log IPv4 packets with impossible addresses
+  if grep -q "^net.ipv4.conf.all.forwarding = 0" "$conf_file"; then
+    echo "Found net.ipv4.conf.all.forwarding = 0. Adding additional settings..."
+    sed -i '/^net.ipv4.conf.all.forwarding = 0/a #Per STIG SCAP # V-257960 - Log IPv4 packets with impossible addresses\nnet.ipv4.conf.all.log_martians = 1' "$conf_file"
+  else
+    echo "Appending settings for V-257960 at the end of $conf_file..."
+    echo -e "\n#Per STIG SCAP # V-257960 - Log IPv4 packets with impossible addresses\nnet.ipv4.conf.all.log_martians = 1" >> "$conf_file"
+  fi
+
+  # V-257961 - Log IPv4 packets with impossible addresses by default
+  if grep -q "^# Per CCE-83961-3: Set kernel.core_pattern." "$conf_file"; then
+    echo "Found Per CCE-83961-3 setting. Adding additional settings..."
+    sed -i '/^# Per CCE-83961-3: Set kernel.core_pattern./i #Per STIG SCAP V-257961 - Log IPv4 packets with impossible addresses by default\nnet.ipv4.conf.default.log_martians = 1' "$conf_file"
+  else
+    echo "Appending settings for V-257961 at the end of $conf_file..."
+    echo -e "\n#Per STIG SCAP V-257961 - Log IPv4 packets with impossible addresses by default\nnet.ipv4.conf.default.log_martians = 1" >> "$conf_file"
+  fi
+
+  # V-257967 - Limit bogus ICMP error response logs
+  if grep -q "^# Per CCE-86394-4:" "$conf_file"; then
+    echo "Found Per CCE-86394-4 setting. Adding additional settings..."
+    sed -i '/^# Per CCE-86394-4:/i #Per STIG SCAP # V-257967 - Limit bogus ICMP error response logs\nnet.ipv4.icmp_ignore_bogus_error_responses = 1' "$conf_file"
+  else
+    echo "Appending settings for V-257967 at the end of $conf_file..."
+    echo -e "\n#Per STIG SCAP # V-257967 - Limit bogus ICMP error response logs\nnet.ipv4.icmp_ignore_bogus_error_responses = 1" >> "$conf_file"
+  fi
+
+  # V-257970 - Disable IPv4 packet forwarding
+  if grep -q "^net.ipv4.conf.default.log_martians = 1" "$conf_file"; then
+    echo "Found net.ipv4.conf.default.log_martians = 1. Adding additional settings..."
+    sed -i '/^net.ipv4.conf.default.log_martians = 1/a #Per STIG SCAP # V-257970 - Disable IPv4 packet forwarding\nnet.ipv4.conf.all.forwarding = 0' "$conf_file"
+  else
+    echo "Appending settings for V-257970 at the end of $conf_file..."
+    echo -e "\n#Per STIG SCAP # V-257970 - Disable IPv4 packet forwarding\nnet.ipv4.conf.all.forwarding = 0" >> "$conf_file"
+  fi
+}
+
+# Update the sysctl configuration file
+update_sysctl_conf "$SYSCTL_CONF"
+
+# Reload sysctl settings
+echo "Reloading sysctl settings..."
+sysctl --system
+
+echo "Sysctl configuration updated and reloaded."
+
+
+
+#SSHD
+SSHD_CONF="/etc/ssh/sshd_config"
+CLIENT_ALIVE_COUNT_MAX="ClientAliveCountMax 1"
+CLIENT_ALIVE_INTERVAL="ClientAliveInterval 600"
+PRIVILEGE_SEPARATION="UsePrivilegeSeparation sandbox"
+
+# Function to check if a pattern exists and replace it
+replace_or_append() {
+  local conf_file="$1"
+  local search_pattern="$2"
+  local replace_string="$3"
+
+  if grep -qE "^#?\s*$search_pattern" "$conf_file"; then
+    echo "Found $search_pattern. Updating to $replace_string..."
+    sed -i "s|^#\?\s*$search_pattern.*|$replace_string|" "$conf_file"
+  else
+    echo "Appending $replace_string at the end of $conf_file..."
+    echo "$replace_string" >> "$conf_file"
+  fi
+}
+
+# Check if the SSH configuration file exists
+if [ -f "$SSHD_CONF" ]; then
+  echo "$SSHD_CONF exists. Updating it..."
+
+  # V-257995 - Terminate SSH connections after being unresponsive
+  replace_or_append "$SSHD_CONF" "ClientAliveCountMax" "$CLIENT_ALIVE_COUNT_MAX"
+
+  # V-257996 - Terminate SSH connections after 10 minutes of unresponsiveness
+  replace_or_append "$SSHD_CONF" "ClientAliveInterval" "$CLIENT_ALIVE_INTERVAL"
+
+  # V-258010 - Configure SSH daemon for privilege separation
+  replace_or_append "$SSHD_CONF" "UsePrivilegeSeparation" "$PRIVILEGE_SEPARATION"
+else
+  echo "$SSHD_CONF does not exist. Creating it and adding settings..."
+  echo "$CLIENT_ALIVE_COUNT_MAX" > "$SSHD_CONF"
+  echo "$CLIENT_ALIVE_INTERVAL" >> "$SSHD_CONF"
+  echo "$PRIVILEGE_SEPARATION" >> "$SSHD_CONF"
+fi
+
+# Restart the SSH daemon
+echo "Restarting sshd..."
+systemctl restart sshd
+
+echo "SSHD configuration updated and sshd restarted."
+
+
+
+
+#PAM.D
+# File paths
+SYSTEM_AUTH="/etc/pam.d/system-auth"
+PASSWORD_AUTH="/etc/pam.d/password-auth"
+
+# Patterns and replacements
+PATTERN_PWQUALITY="password.*pam_pwquality.so"
+PATTERN_PWHISTORY="password.*pam_pwhistory.so"
+PATTERN_UNIX="password.*pam_unix.so"
+
+REPLACEMENT_PWQUALITY="password    required     pam_pwquality.so retry=3"
+REPLACEMENT_PWHISTORY="password    required     pam_pwhistory.so remember=5 retry=3"
+REPLACEMENT_UNIX="password    required     pam_unix.so sha512 shadow rounds=5000"
+
+# Function to check and update PAM configuration
+update_pam_file() {
+  local conf_file="$1"
+  local pattern="$2"
+  local replacement="$3"
+  
+  if grep -Eq "$pattern" "$conf_file"; then
+    echo "Found pattern $pattern in $conf_file. Updating..."
+    sed -i "s|^$pattern.*|$replacement|" "$conf_file"
+  else
+    echo "Pattern $pattern not found in $conf_file. Appending..."
+    echo "$replacement" >> "$conf_file"
+  fi
+}
+
+# Check if PAM files exist
+if [ -f "$SYSTEM_AUTH" ] && [ -f "$PASSWORD_AUTH" ]; then
+  echo "$SYSTEM_AUTH and $PASSWORD_AUTH exist. Updating them..."
+
+  # Update or append configurations in system-auth
+  update_pam_file "$SYSTEM_AUTH" "$PATTERN_PWQUALITY" "$REPLACEMENT_PWQUALITY"
+  update_pam_file "$SYSTEM_AUTH" "$PATTERN_PWHISTORY" "$REPLACEMENT_PWHISTORY"
+  update_pam_file "$SYSTEM_AUTH" "$PATTERN_UNIX" "$REPLACEMENT_UNIX"
+
+  # Update or append configurations in password-auth
+  update_pam_file "$PASSWORD_AUTH" "$PATTERN_PWQUALITY" "$REPLACEMENT_PWQUALITY"
+  update_pam_file "$PASSWORD_AUTH" "$PATTERN_PWHISTORY" "$REPLACEMENT_PWHISTORY"
+  update_pam_file "$PASSWORD_AUTH" "$PATTERN_UNIX" "$REPLACEMENT_UNIX"
+
+  echo "PAM configuration updated successfully."
+else
+  echo "One or both PAM configuration files do not exist. Exiting..."
+  exit 1
+fi
+
+
+
+
+#LOGIN DEFS
+LOGIN_DEFS="/etc/login.defs"
+PASS_MIN_LEN_SETTING="PASS_MIN_LEN 15"
+
+# Function to update or append PASS_MIN_LEN setting
+update_login_defs() {
+  local conf_file="$1"
+  local search_pattern="^PASS_MAX_LEN.*"
+
+  # Check if the file exists
+  if [ -f "$conf_file" ]; then
+    echo "$conf_file exists. Updating it..."
+
+    if grep -qE "$search_pattern" "$conf_file"; then
+      echo "Found PASS_MAX_LEN setting. Adding PASS_MIN_LEN below it..."
+      # Append PASS_MIN_LEN below PASS_MAX_LEN
+      sed -i "/$search_pattern/a $PASS_MIN_LEN_SETTING" "$conf_file"
+    else
+      echo "PASS_MAX_LEN setting not found. Appending PASS_MIN_LEN at the end of the file..."
+      # Append PASS_MIN_LEN at the end of the file
+      echo -e "\n$PASS_MIN_LEN_SETTING" >> "$conf_file"
+    fi
+  else
+    echo "$conf_file does not exist. Exiting..."
+    exit 1
+  fi
+}
+
+# Update the login.defs configuration file
+update_login_defs "$LOGIN_DEFS"
+
+echo "login.defs configuration updated."
+
+
+
+
+
+#LOGIND CONF
+LOGIND_CONF="/etc/systemd/logind.conf"
+IDLE_SESSION_SETTING="StopIdleSessionSec=900"
+
+# Function to update or append StopIdleSessionSec setting
+update_logind_conf() {
+  local conf_file="$1"
+  local search_pattern="#StopIdleSessionSec=infinity"
+
+  # Check if the file exists
+  if [ -f "$conf_file" ]; then
+    echo "$conf_file exists. Updating it..."
+
+    if grep -qE "^$search_pattern" "$conf_file"; then
+      echo "Found commented StopIdleSessionSec=infinity. Making it active and setting to 900..."
+      sed -i "s|^$search_pattern|$IDLE_SESSION_SETTING|" "$conf_file"
+    else
+      echo "Commented StopIdleSessionSec=infinity not found. Checking for active setting..."
+
+      if grep -qE "^StopIdleSessionSec=.*" "$conf_file"; then
+        echo "Found active StopIdleSessionSec setting. Updating it to 900..."
+        sed -i "s|^StopIdleSessionSec=.*|$IDLE_SESSION_SETTING|" "$conf_file"
+      else
+        echo "Appending StopIdleSessionSec=900 at the end of the file..."
+        echo -e "\n$IDLE_SESSION_SETTING" >> "$conf_file"
+      fi
+    fi
+  else
+    echo "$conf_file does not exist. Exiting..."
+    exit 1
+  fi
+}
+
+# Update the logind.conf configuration file
+update_logind_conf "$LOGIND_CONF"
+
+# Restart systemd-logind to apply changes
+echo "Restarting systemd-logind..."
+systemctl restart systemd-logind
+
+echo "logind.conf configuration updated and systemd-logind restarted."
+
+
+
+
+
+#UMASK
+BASHRC="/etc/bashrc"
+NEW_UMASK="umask 077"
+OLD_UMASK_PATTERN="umask 022"
+
+# Function to update or append umask setting in bashrc
+update_umask() {
+  local conf_file="$1"
+  local old_umask_pattern="$2"
+  local new_umask="$3"
+
+  # Check if the file exists
+  if [ -f "$conf_file" ]; then
+    echo "$conf_file exists. Updating it..."
+
+    if grep -qE "$old_umask_pattern" "$conf_file"; then
+      echo "Found umask 022. Updating to umask 077..."
+      sed -i "s|$old_umask_pattern|$new_umask|" "$conf_file"
+    else
+      echo "umask 022 not found. Appending umask 077 at the end of the file..."
+      echo -e "\n$new_umask" >> "$conf_file"
+    fi
+  else
+    echo "$conf_file does not exist. Exiting..."
+    exit 1
+  fi
+}
+
+# Update the umask setting in /etc/bashrc
+update_umask "$BASHRC" "$OLD_UMASK_PATTERN" "$NEW_UMASK"
+
+echo "umask setting updated in $BASHRC."
+
+
+
+
+
+#TMUX
+TMUX_CONF="/etc/tmux.conf"
+LOCK_COMMAND="set -g lock-command vlock"
+LOCK_SESSION="bind X lock-session"
+
+# Function to update or create tmux.conf
+update_tmux_conf() {
+  local conf_file="$1"
+  local lock_command="$2"
+  local lock_session="$3"
+
+  # Check if the file exists
+  if [ -f "$conf_file" ]; then
+    echo "$conf_file exists. Updating it..."
+
+    if grep -qF "$lock_command" "$conf_file"; then
+      echo "Found lock-command. Checking for lock-session binding..."
+      if grep -qF "$lock_session" "$conf_file"; then
+        echo "lock-session binding already present."
+      else
+        echo "Appending lock-session binding under lock-command..."
+        sed -i "/$lock_command/a $lock_session" "$conf_file"
+      fi
+    else
+      echo "lock-command not found. Appending lock-session binding at the end of the file..."
+      echo -e "\n$lock_session" >> "$conf_file"
+    fi
+  else
+    echo "$conf_file does not exist. Creating it with the configurations..."
+    echo "$lock_command" > "$conf_file"
+    echo "$lock_session" >> "$conf_file"
+  fi
+}
+
+# Update or create the tmux.conf configuration file
+update_tmux_conf "$TMUX_CONF" "$LOCK_COMMAND" "$LOCK_SESSION"
+
+# Apply changes to tmux configuration
+echo "Applying changes to tmux configuration..."
+tmux source-file "$TMUX_CONF"
+
+echo "tmux.conf configuration updated and applied."
+
+
+
+
+
+
+# V-258145 - Offload audit records via syslog
+FILE="/etc/audit/plugins.d/syslog.conf"
+if [ -f "$FILE" ]; then
+    if ! grep -q "^active = yes" "$FILE"; then
+        echo "Setting 'active = yes' in $FILE"
+        sed -i 's/^active =.*/active = yes/' "$FILE"
+        systemctl restart auditd
+    else
+        echo "'active = yes' already set in $FILE"
+    fi
+else
+    echo "Creating $FILE with 'active = yes'"
+    echo "active = yes" > "$FILE"
+    systemctl restart auditd
+fi
+
+
+
+
+
+
+# V-258134 - Install and initialize AIDE
+if ! command -v aide &>/dev/null; then
+    echo "AIDE not found. Installing..."
+    dnf install aide -y
+    echo "Initializing AIDE database..."
+    /usr/sbin/aide --init
+    mv /var/lib/aide/aide.db.new.gz /var/lib/aide/aide.db.gz
+    echo "Performing AIDE check..."
+    /usr/sbin/aide --check
+else
+    echo "AIDE is already installed."
+fi
+
+
+
+
+
+# V-258236 - Ensure crypto policy is not overridden
+NSS_CONFIG="/etc/crypto-policies/back-ends/nss.config"
+if [ ! -f "$NSS_CONFIG" ]; then
+    echo "Creating symlink for NSS crypto policy..."
+    mkdir -p /etc/crypto-policies/back-ends
+    ln -s /usr/share/crypto-policies/FIPS/nss.txt "$NSS_CONFIG"
+else
+    echo "Symlink for NSS crypto policy already exists."
+fi
+
+
+
+
+# V-257834 - Remove the tuned package
+echo "Removing the 'tuned' package..."
+dnf remove --noautoremove tuned -y
+
+if ! rpm -q tuned &>/dev/null; then
+    echo "'tuned' package successfully removed."
+else
+    echo "Failed to remove 'tuned' package."
+fi
+
+
+
+
+
+# V-257842 - Install the s-nail package
+echo "Installing the 's-nail' package..."
+dnf install s-nail -y
+
+if rpm -q s-nail &>/dev/null; then
+    echo "'s-nail' package successfully installed."
+else
+    echo "Failed to install 's-nail' package."
+fi
+
+
+
+
+# V-257888 - Set permissions for cron configuration directories
+CRON_DIR="/etc/cron.d"
+
+echo "Setting permissions for $CRON_DIR to 0700..."
+chmod 0700 "$CRON_DIR"
+
+if [ "$(stat -c "%a" "$CRON_DIR")" -eq 700 ]; then
+    echo "Permissions for $CRON_DIR set to 0700 successfully."
+else
+    echo "Failed to set permissions for $CRON_DIR."
+fi
