@@ -1,0 +1,537 @@
+OpenShift 4.8 Restricted Network Installation with vSphere User Provisioned Infrastructure (UPI)
+
+Considerations:
+This procedure focuses on the installation of a 4.8 cluster in an air-gapped or “secured” network. Due to the nature of the installation, some of the steps below might not align with RedHat documentation.
+
+Assumptions:
+-	Root privileges are available for all systems including DNS, Certificate Authority, and vSphere
+-	“Control System” is the system you’ll be working out of. Has to be a Linux system and can be the “Mirror Registry” system. In this example, it is the “Mirror Registry” system.
+-	Capable of transferring files between OS types (windows / Linux) with WinSCP and tools alike.
+-	For the exception of the Bootstrap, Control Plane, and Compute nodes, all other systems much be added to the current domain. We will be using “your.domain” as the domain and “ocp4” as the cluster name for this procedure.
+-	Host Naming:
+	o	Mirror Registry = ocp4-registry
+			**What it does:** Stores OpenShift software and images locally.
+			**Why it’s important:** Allows the cluster to get needed software without internet access.
+	o	Control System = control-system
+			**What it does:** Your main computer for managing the setup.
+			**Why it’s important:** Central place to control and run installation tasks.
+	o	RHEL 8 Repository = rhel8-repo
+			**What it does:** Keeps necessary Linux updates and configurations.
+			**Why it’s important:** Provides essential files for setting up cluster machines.
+	o	API Load Balancer = api-lb
+			**What it does:** Distributes the load for OpenShift’s control center.
+			**Why it’s important:** Helps manage traffic and improves performance and reliability.
+	o	Application Load Balancer = app-lb
+			**What it does:** Manages traffic for apps running on OpenShift.
+			**Why it’s important:** Ensures smooth access to apps and services in the cluster.
+	o	Bootstrap = bootstrap
+			**What it does:** Temporarily sets up the cluster’s core systems.
+			**Why it’s important:** Kickstarts the cluster by deploying the initial setup.
+	o	Control Plane nodes (1-3) = master01-03
+			**What they do:** Run the core parts of OpenShift.
+			**Why they’re important:** Manage the overall operation of the cluster.
+	o	Compute nodes (1-2) = worker01-02
+			**What they do:** Run apps and handle tasks.
+			**Why they’re important:** Provide the actual computing power for workloads.
+
+-	For the exception of the .OVA file, all prerequisite software is copied over to your Control System and located in /OCP4/install-files/
+-	Access to a Linux system with an internet connection.
+ 
+Prerequisites:
+The following is a list of Systems/Software that will be required for a minimal OCP4 cluster installation. The systems can be VMs, physical, or a mix of both. These systems will require RHEL 8.6 or above. VMs are recommended for ease of deployment. 
+
+Systems:
+Mirror Registry								Min: 4 vCPUs, 8GB RAM, 300GB Storage		This will host the release and operator images required for initial cluster installation
+Control System								User Dependent								The system you will be working out of. CAN be the Image Registry host.
+RHEL 8 Repository							Min: 2 vCPUs, 8GB RAM, 200GB Storage		This will host the rhel rpms and will eventually host the bootstrap.ign file.
+API Load Balancer							Min: 2 vCPUs, 8GB RAM, 50GB Storage			LB responsible for handling Kubernetes API and Machine Config traffic (6443 & 22623)
+Application Load Balancer					Min: 2 vCPUs, 8GB RAM, 50GB Storage			LB responsible for handling HTTP and HTTPS traffic (1936, 443, & 80)
+Bootstrap									Min: 4 vCPUs, 16GB RAM, 100GB Storage		This will pull its ignition config file from the repo server, stablish itself as the temp control plane, and begin deploying the Control Plane nodes (Master nodes), which will create the cluster.
+3 Control Plane nodes (Master nodes)		Min: 4 vCPUs, 16GB RAM, 100GB Storage		Serve as the Control Plane for the cluster and host the Cluster Operators. Also refer to as Master nodes.
+2 Compute nodes (Worker nodes)				Min: 4 vCPUs, 16GB RAM, 150GB Storage		Responsible for the cluster processing requested by user or machine tasks.
+
+Software:
+butane									Obtain the latest version by using the command: curl https://mirror.openshift.com/pub/openshift-v4/clients/butane/latest/butane --output butane 
+										**What it does:** Converts easy-to-read files into setup instructions for machines.
+										**Why it’s important:** Helps prepare machines to join the cluster.
+
+oc-4.8.0								Downloaded from the RedHat website
+										**What it does:** Command-line tool to interact with OpenShift.
+										**Why it’s important:** Lets you manage the cluster using commands.
+
+mirror-registry							Stand-alone “mirror registry for Red Hat OpenShift” (Quay Registry). Downloaded from the RedHat website
+										**What it does:** Stores OpenShift images locally.
+										**Why it’s important:** Allows offline installation and updates of OpenShift.
+
+openshift-install-linux-4.8.0			Downloaded from the RedHat website
+										**What it does:** Automates setting up the OpenShift cluster.
+										**Why it’s important:** Simplifies the complex installation process.
+
+rhcos-4.8.0-x86_64-vmware.x86_64.ova	Ova template of the RHCOS system. Downloaded from the RedHat website
+										**What it does:** Virtual machine template for Red Hat CoreOS.
+										**Why it’s important:** Provides a consistent base for OpenShift nodes.
+
+
+
+**Procedures and Configurations:**
+
+
+Mirror Registry Deployment:
+		**What it does:** Sets up a local storage for OpenShift images.
+		**Why it’s important:** Supplies the cluster with needed software in a network without internet access.
+
+For any offline/air-gapped installation of OCP4, an Image Registry must be staged. The installation process will rely on this registry to provide the required OCP4 images to create the cluster. Ensure the host acting as the Image Registry within your restricted network meets the minimum specs stated above.
+NOTE: This will require access to a Linux system with an internet connection. This system will be referred to as “internet-enabled system”
+NOTE: The “Image Registry” you deploy will be referred to as “Mirror Registry”.
+
+1.	On your mirror registry create the “registry”, “credentials”, “cluster-install”, “ocp4”, “certs”, “machine-configs”, “ignition-files”, and “image-updates” directories:
+
+	mkdir -p /OCP4/{registry,credentials,cluster-install,certs,image-updates,install-files}
+	mkdir -p /OCP4/install-files/{machine-configs,ignition-files}
+	mkdir /OCP4/cluster-install/ocp4
+
+2.	Generate certificates for your mirror registry host and have them signed by your CA:
+
+	
+	vi openssl.cnf	# Add the following to the “openssl.cnf” file, save, and exit:
+	
+		[req]
+		default_bits = 4096
+		distinguished_name = req_distinguished_name
+		req_extensions = req_ext
+		prompt = no
+	
+		[req_distinguished_name]
+		C = US
+		ST = <YOUR_STATE>
+		L = <YOUR_LOCALE_OR_CITY>
+		O = <YOUR_ORGANIZATION>
+		OU = <YOUR_ORG_UNIT>
+		CN = ocp4-registry.your.domain
+	
+		[req_ext]
+		subjectAltName = @alt_names
+	
+		[alt_names]
+		DNS = ocp4-registry.your.domain
+
+	#Then run
+	openssl genrsa -out $(hostname -f).key 2048
+	openssl req -new -key $(hostname -f).key -out $(hostname -f).csr -config openssl.cnf
+	# You should now have generated two files, a .key and a .csr file. Copy the .csr file to your Certificate Authority and have it sign the .csr file. Once signed, your CA will generate a .cer file for ocp4-registry, name it ocp4-registry.your.domain. This is your signed certificate. Copy this signed certificate along with a copy of your CA’s root certificate (certnew.cer for windows CAs) back ocp4-registry:/OCP4/certs/.
+
+	cd /OCP4/certs
+	mv certnew.cer rootCA.pem && cp rootCA.pem /etc/pki/ca-trust/sources/anchors/.
+    update-ca-trust
+	mv $(hostname -f).cer $(hostname -f).pem
+	openssl x509 -in $(hostname -f).pem -noout -text
+	# Inspect your signed certificate and ensure in contains the “x509v3 Subject Alternative Name:” section.
+
+3.	Install the “mirror registry for Red Hat OpenShift” or “Quay” registry:
+
+	cd /OCP4/install-files/
+	tar zxvf mirror-registry.tar.gz -C /OCP4/registry
+	/OCP4/registry/mirror-registry install --quayHostname $(hostname -f) --quayRoot /OCP4/registry --sslCert /OCP4/certs/$(hostname -f).pem --sslKey /OCP4/certs/$(hostname -f).key -v
+	# This will begin to install the Quay Registry via a series of yaml playbooks with your signed certificate. This will prevent podman pull errors later on during the installation process.
+	
+	# If using a pre-stig’d system, the installation might fail due to the set umask. If it fails, run “chmod -R ugo+rX /OCP4/registry” without the quotes and re-run the installation command.
+	# Once the installation completes, the “init” username and password are displayed, save those credentials in a text file “/OCP4/credentials/init-creds” for later use.
+	
+	podman login --authfile /OCP4/credentials/pull-secret.txt -u init $(hostname -f):8443
+	# This will generate your registry’s init user pull-secret in a base64 encoded string.
+	
+	cat /OCP4/credentials/pull-secret.txt | jq . > /OCP4/credentials/pull-secret.json
+	# This will generate a copy of your pull-secret text file in JSON format.
+
+4.	Configure credentials that allow images to be mirrored to your restricted network registry:
+
+	# On your internet-enabled system, download a copy of your Red Hat pull-secret and run the following:
+
+	cat ~/pull-secret.txt | jq . > ~/pull-secret.json
+	# This will generate a copy of your pull-secret text file in JSON format.
+
+	# On your mirror registry run the following:
+
+	echo -n ‘<USERNAME:PASSWORD>’ | base64 -w0
+	# Where USERNAME and PASSWORD are the init credentials created during the Quay installation.
+	# This will output the base64 encoded string for the init user credentials (token). Copy the ‘token’ value and create a section that describes your mirror registry within the ‘pull-secret.json’ file that resides in the INTERNET-ENBALED system. This will authorize your mirror registry to receive the images being downloaded from the Red Hat website.
+	# The entry that describes your mirror registry should follow the format in your Red Hat pull-secret.json, should look like the following;
+
+		"auths": {
+			"<your_mirror_registry_fqdn>": { 
+			"auth": "<TOKEN>", 
+			"email": "you@example.com"
+		},
+
+5.	Mirroring OCP Images:
+
+	# On BOTH, internet-enabled system AND your mirror registry, set the following variables (you can also create a .sh file with the variables and place it in /etc/profile.d/ so they persist, remember to reload your environment or logout/login again):
+
+		OCP_RELEASE=<release_version>
+		LOCAL_REGISTRY='<local_registry_host_name>:<local_registry_host_port>'
+		LOCAL_REPOSITORY='ocp4/openshift4'
+		PRODUCT_REPO='openshift-release-dev'
+		LOCAL_SECRET_JSON='<path_to_pull_secret>'
+		RELEASE_NAME='ocp-release'
+		ARCHITECTURE=<server_architecture>
+		REMOVABLE_MEDIA_PATH=<path>
+
+	# Please see below for explanations/ list of available values for the variables set:
+
+		OCP_RELEASE= 							Would be the version of OpenShift you’re trying to install. In this case it is 4.8.0
+		LOCAL_REGISTRY= 						Your mirror registry FQDN and port it serves content on (8443)
+		LOCAL_REPOSITORY='ocp4/openshift4'		Has to be set to 'ocp4/openshift'
+		PRODUCT_REPO='openshift-release-dev'	Has to be set to 'openshift-release-dev'
+		LOCAL_SECRET_JSON= 						The path to either your mirror registry pull-secret.json or the internet-enabled system pull-secret.json, depending on the system you're in.
+		RELEASE_NAME='ocp-release'				Has to be set to 'ocp-release'
+		ARCHITECTURE= 							The architecture of the systems the installation will occur in (x86_64)
+		REMOVABLE_MEDIA_PATH= 					The removable path the images will be saved to (internet-enabled system) or uploaded from (your mirror registry).
+
+	# On the internet-enabled system un-tar the oc-4.8 binary:
+
+	tar zxvf <OC-4.8.0.tar.gz_FILE> 
+	chmod 755 oc
+	cp oc /usr/bin/
+
+	oc adm release mirror -a ${LOCAL_SECRET_JSON} --from=quay.io/${PRODUCT_REPO}/${RELEASE_NAME}:${OCP_RELEASE}-${ARCHITECTURE} --to=${LOCAL_REGISTRY}/${LOCAL_REPOSITORY} --to-release-image=${LOCAL_REGISTRY}/${LOCAL_REPOSITORY}:${OCP_RELEASE}-${ARCHITECTURE} --dry-run
+		NOTE: This will execute a dry-run of the image download process. ENSURE to record the 'imageContentSources' section from the output. You must add the 'imageContentSources' section to the 'install-config.yaml' file during the installation.	
+		NOTE: If the command fails with unspecified variable errors, log out and log back into the system to ensure your environment loads the variables from the file you created in /etc/profile.d/
+
+	oc adm release mirror -a ${LOCAL_SECRET_JSON} --to-dir=${REMOVABLE_MEDIA_PATH}/mirror  quay.io/${PRODUCT_REPO}/${RELEASE_NAME}:${OCP_RELEASE}-${ARCHITECTURE}
+	# This will begin the image download process and store all the images in the {REMOVABLE_MEDIA_PATH}/mirror folder.
+	# Once the download is complete, tar the ‘mirror’ folder containing all the images to facilitate transport of the images into the restricted network and preserve the integrity of its contents. Failure to tar the folder will cause deletion of various symlinks within the ‘mirror’ directory which will prevent upload your mirror registry.
+
+	tar czvf images-to-upload.tar.gz {REMOVABLE_MEDIA_PATH}/mirror
+	# Transport the tar file to your restricted network following your environment’s security procedures and place the tar file in your mirror registry within the ‘/OCP4/image-updates/’ folder.
+	
+	# On your image registry, run the following to un-tar and upload the images to the registry:
+	
+	tar xzvf /OCP4/image-updates/images-to-upload.tar.gz -C /OCP4/image-updates/
+	oc image mirror -a ${LOCAL_SECRET_JSON} --from-dir=${REMOVABLE_MEDIA_PATH}/mirror "file://openshift/release:${OCP_RELEASE}*" ${LOCAL_REGISTRY}/${LOCAL_REPOSITORY}
+	# This will attempt to upload the images to your registry. If there are failures on a few of the images during the upload process but others successfully uploaded, re-run the previous command until all images are uploaded.
+	# Once complete, you should now be able to login to the Quay registry via the web url <YOUR_REGISTRY_FQDN:8443> with the ‘init’ credentials you previously saved. You will see the ocp4/openshift repository available and all the images uploaded.
+
+DNS Configuration:
+The OCP4 infrastructure and cluster installation process heavily relies on proper DNS configuration. This includes A Records, Aliases, Pointer Records, etc. The following will guide you through creating the required DNS entries to support the cluster installation following the naming convention previously stated in this procedure.
+		**What it does:** Sets up name lookup for the cluster.
+		**Why it’s important:** Makes it easy for cluster components to find and talk to each other.
+
+1.	Create ‘A’ records, ‘PTR’ records, and ‘Alias’ records for the cluster systems and load balancers:
+
+	# Login to your DNS server and under your “forward lookup zone” ensure the following records exist:
+
+	‘A’ Record: 	api-lb.your.domain				192.168.0.13
+	‘A’ Record:		app-lb.your.domain				192.168.0.14
+	‘A’ Record:		bootstrap.ocp4.your.domain		192.168.0.19
+	‘A’ Record:		master01.ocp4.your.domain		192.168.0.10
+	‘A’ Record:		master02.ocp4.your.domain		192.168.0.11
+	‘A’ Record:		master03.ocp4.your.domain		192.168.0.12
+	‘A’ Record:		worker01.ocp4.your.domain		192.168.0.15
+	‘A’ Record:		worker02.ocp4.your.domain		192.168.0.16
+
+	‘Alias’:		api.ocp4.your.domain			api-lb.your.domain
+	‘Alias’:		api-int.ocp4.your.domain		api-lb.your.domain
+	‘Alias’:		*.apps.ocp4.your.domain			app-lb.your.domain
+
+	# Under “reverse lookup zones” ensure the following PTR records exist:
+
+	‘PTR’ Record:		192.168.0.13				api.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.13				api-int.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.19				bootstrap.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.10				master01.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.11				master02.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.12				master03.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.15				worker01.ocp4.your.domain
+	‘PTR’ Record:		192.168.0.16				worker02.ocp4.your.domain
+
+	# Ensure the records are accurate, any typo will cause cluster installation failure. 
+
+Load Balancer Deployment:
+The load balancers aide the control plane nodes to identify the bootstrap system and retrieve machine configurations during the cluster installation process. Moreover, the LBs will also distribute API and HTTPS traffic among the control plane and worker nodes. The LB we’ll be installing/configuring is “HA Proxy”.
+In addition, the HA Proxy package will be installed on fresh rhel8 systems (Vanilla or Pre-STIG’d) which have already been joined to the domain as stated in the “Assumptions” section of this procedure. 
+		**What it does:** Balances incoming traffic between servers.
+		**Why it’s important:** Ensures the system handles traffic efficiently and stays up if a server fails.
+
+1.	Install and configure HA Proxy on BOTH the API LB and the Application LB:
+
+	yum install haproxy -y
+	systemctl enable haproxy
+
+	# Create a backup of the original haproxy.cfg file and modify the current .cfg file to reflect the “sample_haproxy.cfg” file provided in the root folder of this procedure.
+
+	cp /etc/haproxy/haproxy.cfg /etc/haproxy/haproxy.cfg.original
+	vi /etc/haproxy/haproxy.cfg
+		NOTE: For the API LB haproxy.cfg file, ensure to comment out sections that include “ingress-router-443” and “ingress-router-80” configs. This traffic will be handled by the Application LB.
+		NOTE: For the Application LB haproxy.cfg file, ensure to comment out sections that include “api-server-6443” and “machine-config-server-22623” configs. This traffic will be handled by the API LB.
+
+	# If SELinux is set to “ENFORCING”, ensure that HAProxy can bind to the configured ports 
+
+	setsebool -P haproxy_connect_any=1
+	systemctl restart haproxy
+
+	# Verify the LBs are “LISTENING” to all configured ports 
+
+	netstat -nltupe | grep -i haproxy
+
+	# If utilizing a firewall, ensure all ports are allowed through it. 
+	# Both API and Application load balancing processes can be accomplished by ONE machine. Deploying two LBs, each to handle a section of traffic, will allow for scaling of the cluster and its workloads. In addition, it provides us with a manual failover in the event a Load Balancer goes down as you can “un-comment” the sections that were handled by the failed system and restart the haproxy service. This is why both systems have the exact haproxy.cfg but each have specific sections commented out.
+
+2.	Verify DNS entries
+
+	# From your mirror registry, run DNS lookups for the Kubernetes API, wildcard routes, and the cluster nodes. Ensure the IP addresses in the outputs correspond to the correct systems.
+
+	# For the Kubernetes API record name
+	dig +noall +answer @<nameserver_ip> api.ocp4.your.domain
+
+	# For the Kubernetes Internal API record name
+	dig +noall +answer @<nameserver_ip> api-int.ocp4.your.domain
+
+	# For the application wildcard lookup
+	dig +noall +answer @<nameserver_ip> <random>.apps.ocp4.your.domain
+		NOTE: ALL of the application wildcard lookups must resolve to the Application Ingress Load Balancer’s IP address. You can replace <random> with anything. i.e.:
+		dig +noall +answer @<nameserver_ip> console-openshift-console.apps.cop4.your.domain
+	
+	# For the bootstrap record name
+	dig +noall +answer @<nameserver_ip> bootstrap.ocp4.your.domain
+
+	# From your mirror registry, run reverse DNS lookups against the IP addresses of the Load Balancers and the cluster nodes.
+	# For the API LB
+	dig +noall +answer @<nameserver_ip> -x 192.168.0.13
+		NOTE: Check the response includes the records for the Kubernetes API and ‘Int’ API.
+	
+	# For the bootstrap
+	dig +noall +answer @<nameserver_ip> -x 192.168.0.19
+		NOTE: Use this method to check all the Control Plane and Worker nodes.
+
+Generate an SSH Keypair:
+SSH access to the cluster nodes will be granted via the “install-config.yaml” file. You will need to add your SSH PUBLIC key to the “install-config.yaml” prior to cluster deployment otherwise the cluster nodes will be inaccessible. You can either use an existing ssh keypair or create a new keypair for your cluster nodes.
+		**What it does:** Creates secure access keys.
+		**Why it’s important:** Allows secure and password-free access to cluster machines.
+
+1.	Creating a new Keypair:
+
+	# From your mirror registry, run the following
+
+	ssh-keygen -t rsa -N ‘’ -f /root/.ssh/ocp4-cluster-sshkey
+		NOTE: This will create 2 keys, a ‘ocp4-cluster-sshkey’ (private) AND a ‘ocp4-cluster-sshkey.pub’ (public)
+
+	# Start ‘ssh-agent’ as a background task if not already running and add your new PRIVATE key
+
+	eval “$(ssh-agent -s)”
+	ssh-add /root/.ssh/ocp4-cluster-sshkey
+
+2.	Using an existing Keypair:
+
+	# Start ‘ssh-agent’ as a background task if not already running and add your new PRIVATE key
+
+	eval “$(ssh-agent -s)”
+	ssh-add /root/.ssh/<EXISTING_PRIVATE_KEY>
+		NOTE: Remember that contents of the PUBLIC key are added to the ‘install-config.yaml’ file to provide ssh access to the user the key belong to. Also, keep in mind that losing this key will prevent you from accessing the cluster nodes via ssh. There is an alternative if you have "cluster admins" privileges which involves using the "oc debug node/<NODE_FQDN>" command if the key is lost.
+ 
+Creating the ‘install-config.yaml’ file:
+The ‘install-config.yaml’ file is used by the ‘openshift-install’ binary to determine specific aspects of the cluster you want to deploy. This file will be consumed after running the ‘openshift-install’ command to generate manifest and machine config files for your cluster so it is recommended to store a backup in case you need to re-run the command.
+
+1.	Refer to the ‘sample_install-config.yaml’ file provided in the root folder of this procedure.
+
+	# Stage a copy of your modified install-config.yaml in /OCP4/install-files/ AND in /OCP4/cluster-install/ocp4/
+	# The install-config.yaml in /OCP4/install-files/ is the backup and the other will be consumed.
+	# Ensure you’ve filled out all the parameters unique to your environment such as your init user’s pull-secret, your public sshkey, your root CA’s certificate, your mirror registry’s information, etc.
+
+2.	 For a list of additional parameters and possible settings, refer to RedHat’s documentation on the subject.
+
+Creating and Editing Manifest files:
+From your mirror registry you will run the ‘openshift-install’ binary to generate the required manifest files. In addition, you will edit and delete a few manifest files not required for this specific installation of OCP4.
+		**What it does:** Creates setup files for the cluster.
+		**Why it’s important:** Customizes what resources and settings the cluster will use.
+
+1.	Install the ‘openshift-install’ and ‘butane’ binaries:
+	
+	cd /OCP4/install-files
+	tar xzvf openshift-install-linux-4.8.0.tar.gz
+	chmod 755 openshift-install
+	cp openshift-install /usr/bin/.
+
+	tar xzvf butane.tar.gz
+	chmod 755 butane
+	cp butane /usr/bin/.
+
+2.	Create, delete, and modify manifest files:
+
+	openshift-install create manifests --dir /OCP4/cluster-install/ocp4
+	# This will generate...		
+		NOTE: /OCP4/cluster-install/ocp4 is the location where the ‘install-config.yaml’
+ 
+
+	rm -f /OCP4/cluster-install/ocp4/openshift/99_openshift-cluster-api_master-machines-*.yaml /OCP4/cluster-install/ocp4/openshift/99_openshift-cluster-api_worker-machineset-*.yaml
+	# Deleting the manifests that define the control plane and compute machines, you can save them somewhere else but you will not need them here.
+
+	vi /OCP4/cluster-install/ocp4/manifests/cluster-scheduler-02-config.yaml
+	# Set the ‘mastersSchedulable’ parameter to ‘false’. Save and exit.
+
+3.	Configure chrony time service:
+
+	# From your mirror registry, vi the contents of your chrony.conf file and make a note of the time sources it uses.
+
+	# Create a butane config file called ‘99-master-chrony.bu’ in /OCP4/install-files/machine-configs/ and include the time sources found in your chrony.conf file:
+
+	vi /OCP4/install-files/machine-configs/99-master-chrony.bu
+		NOTE: Refer to the ‘sample_99-<MASTER_OR_WOKER>-chrony.bu’ file provided it the root folder of this procedure
+ 	
+	# Convert the config file ‘99-master-chrony.bu’ into a MachineConfig job ‘99-master-chrony.yaml’ using Butane:
+
+	butane /OCP4/install-files/machine-configs/99-master-chrony.bu -o /OCP4/install-files/machine-configs/99-master-chrony.yaml
+
+	# Copy the ‘99-master-chrony.yaml’ to /OCP4/cluster-install/ocp4/openshift/ 
+
+	cp /OCP4/install-files/machine-configs/99-master-chrony.yaml /OCP4/cluster-install/ocp4/openshift/
+
+	# Repeat the prior steps for the worker nodes.
+
+4.	Create a separate /var partition for worker nodes with drives larger than 100GB:
+
+	# Create a butane config file called ‘98-var-partition.bu’ in /OCP4/install-files/machine-configs/ 
+
+	vi /OCP4/install-files/machine-configs/98-var-partition.bu
+		NOTE: Refer to the ‘sample_98-var-partition.bu’ file provided in the root folder of this procedure and understand the following:
+		‘device:’ refers to the disk name. i.e. /dev/sda or /dev/sdb
+		‘start_mib:’ refers to where in the disk the ‘/var’ partition will start. i.e. if you were to put 50000 that means ‘/var’ will begin at the 50000th mib of disk /dev/sda and anything before that will automatically be used for ‘/’.
+		‘size_mib:’ refers to the total size of the ‘/var’ partition. i.e. If you were to start at the 50000th mib and had a ‘size_mib’ of 100000 mib (~100GB), that means /dev/sda will have to be at least 158GB in size (due to the mib to GB conversion). You may also set it to ‘0’ which will consume whatever space is left on the drive.
+
+	# Convert the config file ’98-var-partition.bu’ into a MachineConfig job ’98-var-partition.yaml’ using Butane:
+	
+	butane /OCP4/install-files/machine-configs/98-var-partition.yaml -o /OCP4/install-files/machine-configs/98-var-partition.yaml
+
+	# Copy the ‘98-var-partition.yaml’ to /OCP4/cluster-install/ocp4/openshift/
+
+	cp /OCP4/install-files/machine-configs/98-var-partition.yaml /OCP4/cluster-install/ocp4/openshift/
+
+Create Ignition Config files:
+The ignition config files will be used by the bootstrap machine to load its initial configuration and server as the temporary control plane. After its configuration is complete, it will be used to deploy the actual control plane systems. Then, the worker nodes will be deployed and the initial cluster installation will be completed.
+		**What they do:** Provide initial setup for the cluster machines.
+		**Why they’re important:** Configure machines to join and operate in the cluster.
+
+1.	Generate the Ignition files:
+
+    openshift-install create ignition-configs --dir /OCP4/cluster-install/ocp4
+    cp /OCP4/cluster-install/ocp4/auth/kubeadmin-password /OCP4/credentials/
+        # NOTE: These are the credentials for the kubeadmin account
+    
+    chmod 644 /OCP4/cluster-install/ocp4/bootstrap.ign
+    scp -pr /OCP4/cluster-install/ocp4/boostrap.ign rhel8-repo:<PATH_TO_WHERE_IT_SERVES_CONTENT>
+
+	vi /OCP4/cluster-install/ocp4/merge-bootstrap.ign
+        # NOTE: Refer to the ‘sample_merge-bootstrap.ign’ file provided in the root folder of this procedure. Ensure to specify the URL in the “source” section for the ‘bootstrap.ign’ file you copied over to your HTTP server (RHEL 8 repository).
+	
+    # Convert the ignition config files to Base64 encoding. This will later be used in the VM parameter “guestinfo.ignition.config.data”.
+    
+	base64 -w0 /OCP4/cluster-install/ocp4/master.ign > /OCP4/cluster-install/ocp4/master.64
+	base64 -w0 /OCP4/cluster-install/ocp4/worker.ign > /OCP4/cluster-install/ocp4/worker.64
+    base64 -w0 /OCP4/cluster-install/ocp4/merge-bootstrap.ign > /OCP4/cluster-install/ocp4/merge-bootstrap.64
+	
+    cp /OCP4/cluster-install/ocp4/*.ign /OCP4/install-files/ignition-files/.
+        # NOTE: This will make a copy of all the ignition files
+
+    cp /OCP4/cluster-install/ocp4/*.64 /OCP4/install-files/ignition-files/.
+        # NOTE: This will make a copy of all the base64 encoded ignition files
+
+Create and Configure VMs:
+This portion will briefly guide you through creating the cluster nodes from the RedHat CoreOS template and adding the require VM parameters kickstart the cluster installation. The guestinfo.afterburn.initrd.network-kargs parameter is given in the event a DHCP server is NOT available.
+
+1.	Clone from the RHCOS template to Virtual Machine:
+
+    # Login to vSphere and upload the RHCOS OVA Template if you haven’t already done so.
+
+    # Right-click on the template and select “Clone > Clone to Virtual Machine”
+
+    # Configure the “bootstrap”, “Control Plane”, and “Worker node” machines according to the specs designated in the “Hardware” section of this procedure. Before completing the clone, in the “Customize Hardware” section, click “VM Options > Advanced > Edit Configuration > ADD CONFIGURATION PARAMS” and set the following VM parameters for the CORRESPONDING machine:
+
+    guestinfo.ignition.config.data		        # The contents of the corresponding base64 file
+                                                # for the bootstrap use the ‘merge-bootstrap.64’ file
+
+    guestinfo.ignition.config.data.encoding     # set to ‘base64’ without the quotes
+
+    disk.EnableUUID					            # set to ‘TRUE’ without the quotes
+
+    guestinfo.afterburn.initrd.network-kargs	# This sets the IP configs in the boot parameters for the corresponding system.
+                                                # See the list of IP configs in the ‘sample_IP-configs.txt’ file for more information pertaining to this cluster install.
+
+    # Create and modify all cluster machines by following the previous steps.
+	# Once all nodes have been created, power them on starting with the bootstrap system.
+
+Monitoring the Bootstrap Process:
+At this point all cluster nodes have been powered on and the bootstrap nodes is preparing the control plane nodes. This process will take 30 minutes at most. You are able to monitor the Bootstrap process from your “Control System” (in this case your mirror registry) to verify its completion. Once the Bootstrapping process is complete you will receive a message similar to the one below:
+“INFO It is now safe to remove the bootstrap resources”
+Remove the bootstrap machine from the load balancers and restart the HAProxy service (the bootstrap system is no longer needed and can be disposed of at your leisure).
+
+1.	Monitor the bootstrap process:
+
+    Openshift-install --dir /OCP4/cluster-install/ocp4/ wait-for bootstrap-complete --log-level=info
+		# NOTE: The log-level can be set to ‘warn’, ‘debug’, or ‘error’ as well.
+
+    # Once the bootstrapping process is complete, remove the bootstrap entry from all load balancers.
+    # Your master nodes (control plane nodes) should be up and running and will be adding the worker nodes to the cluster if not already done so.
+
+2.	Login to the Cluster:
+
+    export KUBECONFIG=/OCP4/cluster-install/ocp4/auth/kubeconfig
+
+    oc whoami
+        # NOTE: This will verify who you’re logged in as. It should be ‘system:admin’.
+
+Approving CSRs for your Additional Machines:
+When you add machines to your cluster (in this case the worker nodes) two CSRs are generated (Client request and Server requests) for each machine added. You must verify they were approved or approved them manually.
+		**What it does:** Approves security certificates for new cluster machines.
+		**Why it’s important:** Allows new machines to securely join and communicate in the cluster.
+
+1.	Check your cluster machines:
+
+    oc get nodes
+        # NOTE: The output should reflect your master nodes. Worker node CSRs have not been approved yet
+
+    oc get csr
+        # NOTE: Will display a list of CSRs, review the ones in ‘Pending’ status
+
+    oc adm certificate approve <csr_name>
+        # NOTE: Approve the client CSRs.
+
+    oc get csr
+        # NOTE: Now review the pending server CSRs for each machine you added.
+
+    oc adm certificate approve <csr_name>
+        # NOTE: Approve the server CSRs.
+
+	oc get nodes
+		# NOTE: Verify all machines are recognized by your cluster and are in ‘Ready’ status.
+
+Initial Operator Configuration:
+Once the control plane initializes, immediately configure some Operators so that they all become available. 
+
+1.	Watch cluster components come online:
+
+    watch -n5 oc get clusteroperators
+        # NOTE: Displays a list of all the ClusterOperators and their status. Configure any that are not set to ‘True’ under the ‘Available’ column.
+
+2.	Disable the default OperatorHub sources:
+
+    oc patch OperatorHub cluster --type json -p '[{"op": "add", "path": "/spec/disableAllDefaultSources", "value": true}]'
+        # NOTE: This disables the sources for the default catalogs by adding ‘disableAllDefaultSources: true’ to the ‘OperatorHub’ object.
+		
+        # NOTE: Default catalog sources (Red Hat and other community project) are installed by default during the cluster installation. You must disable these sources in a restricted network installation.
+
+        # Alternatively, you can use the web console to manage catalog sources. From the Administration → Cluster Settings → Configuration → OperatorHub page, click the Sources tab, where you can create, delete, disable, and enable individual sources.
+
+3.	Confirm all the cluster components are online:
+
+    watch -n5 oc get clusteroperators
+		
+	# Alternative:
+        Openshift-install --dir /OCP4/cluster-install/ocp4/ wait-for install-complete
+            # NOTE: The command succeeds when the Cluster Version Operator finishes deploying the OCP cluster from the Kubernetes API server. 
+
+	
+	oc get pods --all-namespaces
+		# NOTE: Confirm the Kubernetes API server is communicating with the pods.
+	
+    # You can also look at the logs for any of the pods listed in the previous command if you choose to.
+
+    oc logs <pod_name> -n <namespace>

@@ -1,0 +1,8 @@
+ip=<IP_ADDRESS>::<GATEWAY>:<NET_MASK>:<HOST_FQDN>:<CONNECTION_DEV>:none nameserver=<NAMESERVER_IP_ADDRESS>
+
+ip=192.168.0.19::192.168.0.1:255.255.255.0:bootstrap.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
+ip=192.168.0.10::192.168.0.1:255.255.255.0:master01.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
+ip=192.168.0.11::192.168.0.1:255.255.255.0:master02.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
+ip=192.168.0.12::192.168.0.1:255.255.255.0:master03.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
+ip=192.168.0.15::192.168.0.1:255.255.255.0:worker01.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
+ip=192.168.0.16::192.168.0.1:255.255.255.0:worker02.ocp4.your.domain:ens192:none nameserver=<NAMESERVER_IP_ADDRESS>
