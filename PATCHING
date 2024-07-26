@@ -1,0 +1,29 @@
+#CHECK PROCESSES 
+
+#Check space
+
+    df -ha
+
+#Clear Cache
+
+    sudo rm -rf /var/cache/ymu/*
+    sudo dnf clean metadata
+    sudo dnf clean all
+
+#Update 
+
+    sudo dnf update
+    or 
+    sudo dnf update -y #to accept all changes automatically 
+    or 
+    sudo dnf update --best --allowerasing 
+    or 
+    sudo dnf remove --noautoremove <package> #if there is a package your removing and don't want to remove a specific dependency 
+
+#check if update requires restart 
+
+    sudo needs-restarting -r 
+
+#Reboot
+
+    sudo reboot

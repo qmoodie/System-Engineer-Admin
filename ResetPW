@@ -1,0 +1,10 @@
+#Resetting User PW on SLLan 
+
+    -remote desktop
+    
+    -windows+r 
+    
+    -mmc
+    -Active directory users & computers
+
+    -Div9 > users > find > username > reset pw 

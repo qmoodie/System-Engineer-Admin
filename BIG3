@@ -1,0 +1,69 @@
+#BIG 3 FOR VM CONFIG 
+
+#Add machine to anisbble hostfile 
+
+    github
+    ansible server - g93anible-02 - ssh <username>@g93ansible-02
+
+#Add machine to Redhat Satellite server 
+
+    -Hosts (side menu)
+    -Register host 
+        org - div09
+        location - group 0993
+        operating system - <rhel>
+        capsule - <llan.ll.mit.edu>
+        insecure - (check box)
+        activation keys - <rhel>
+
+        #go to adavanved
+
+        -force - (check box) 
+
+    -Generate command 
+    -Copy and Paste command to the machien and run it 
+
+
+#Request a DNS 
+
+    head to infoblocks
+    navigate to IPAM tab 
+    select network/search 
+    find unused IP
+
+    #setting up the DNS/hostname
+    
+    head to Rapid DNS
+    input hostname and unused IP to register the IP to the host
+
+
+    #On SLLAN 
+
+*****The initial Kickstart doesnt include joining the the Active Directory, security toolls, configuring the DNS (RESOLV.CONF) adding those listed will be nedded after completing above with ansible playbooks
+
+
+#Ansible 
+
+    $ssh <username>@g93ansible-02
+    $cd /mnt/g93ansible_git_sync
+
+    #playbooks 
+
+    join_ad.yml
+    isd_sectools_install.yml
+
+    #run playbooks
+
+    $ansible-playbook <playbook> --limit=<hostname of machine> <-------------  VERY IMPORTANT!!!!!!!
+
+# Make sure you configure resolv.conf folder for dns server 
+
+#make sure you configure /etc/enviorment
+
+    http_proxy=http://llproxy.llan.ll.mit.edu:8081
+    https_proxy=http://llproxy.llan.ll.mit.edu:8080
+    ftp_proxy=http://llproxy.llan.ll.mit.edu:8080
+    ALL_PROXY=http://llproxy.llan.ll.mit.edu:8080
+    no_proxy=172.25.28.228,llisdcap1,172.25.4.235,172.25.4.12,isd-its-repo,localhost,127.0.0.1,172.25.4.225,llisdplatrhnsat,.llan.ll.mit.edu,g3ws,.mitll.ad.local
+
+Breakawayfrom93!

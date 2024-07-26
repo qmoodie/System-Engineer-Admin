@@ -1,0 +1,76 @@
+#What is the problem? 
+    error meesages 
+    symptoms 
+
+#Check logs
+
+    /var/log/syslog
+    /var/log/messages
+    /var/log/<application>
+    or 
+    $journalctl
+
+    #use $tail to see most recent entries 
+
+        tail /var/log/messages
+        tail -f /var/log/messages (-f is used for realtime updates)
+
+
+#Check system resources 
+
+    cpu/memory usages - $htop or $top to see if usage is the issue 
+    disk space - $df -h to check disk space 
+    inodes - $df -i to check inodes (wtf is inodes ?)
+
+
+#Check running services 
+
+    $systemctl status <service> to check status of service 
+    $sudo systemctl restart <service> 
+                    reload
+                    start
+                    stop
+                    enable
+                    disable
+                    pause
+                    resume
+
+
+#Network issues 
+
+    $ping <host/ip> to check connections
+    $ifconfig or $ip to check network interface 
+    $netstat -tuln or $s -tuln to see ports
+        netstat -tuln | grep LISTEN 
+            #.0.0.0.0:22
+            # 22 is the open port in that synatx
+    # open the port via the firewall 
+     
+
+
+#File/Dir permissions 
+
+    $ls -l to check permissions 
+    $chmod to change permission 
+        ex: chmod 755 DirA
+            chmod go+wr DirA
+    $chown to change owner 
+
+
+#Process Management 
+
+    $ps aux to check running services 
+    $kill <pid> to terminate problem process
+
+
+#Package Management | Is system updated/pacthed? 
+
+    $sudo dnf/yum update 
+                 install
+                 remove
+    $sudo dnf remove -noautoremoving <package> to keep a specific dependency 
+
+#Reboot
+#sometimes rebooting will solve the problem 
+
+$sudo reboot
