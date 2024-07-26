@@ -1,0 +1,39 @@
+apiVersion: v1
+baseDomain: your.domain 
+compute: 
+- hyperthreading: Enabled 
+  name: worker
+  replicas: 0 
+controlPlane: 
+  hyperthreading: Enabled 
+  name: master
+  replicas: 3 
+metadata:
+  name: ocp4 
+platform:
+  vsphere:
+    vcenter: <your.vcenter.server.fqdn> 
+    username: <username> 
+    password: "<password>" 
+    datacenter: <your_datacenter> 
+    defaultDatastore: <your_datastore> 
+    folder: "/<datacenter_name>/vm/<folder_name>" 
+    diskType: thin 
+fips: true 
+pullSecret: '{"auths":{"<your_mirror_registry_fqdn>:8443": {"auth": "<INIT's_CREDENTIALS_IN_BASE64_FORMAT"}}}' 
+sshKey: '<YOUR_PUBLIC_SSH_KEY>' 
+additionalTrustBundle: | 
+  -----BEGIN CERTIFICATE-----
+  <YOUR_CA's_ROOT_CERTIFICATE_IN_PEM_FORMAT>
+  -----END CERTIFICATE-----
+imageContentSources: 
+- mirrors:
+  - <your_mirror_registry_fqdn>:8443/ocp4/openshift4
+  source: quay.io/openshift-release-dev/ocp-release
+- mirrors:
+  - <your_mirror_registry_fqdn>:8443/ocp4/openshift4
+  source: quay.io/openshift-release-dev/ocp-v4.0-art-dev
+capabilities:
+  baselineCapabilitySet: None
+  additionalEnabledCapabilities:
+  - openshift-samples
