@@ -1,0 +1,23 @@
+## Extract ISO Content
+
+mkdir /root/custom-iso_v1
+mount -o loop /PATH/TO/ISO /mnt
+tar cf - -C /mnt . | tar xf - -C /root/custom-iso_v1   # This command archives all the contents of the iso and then extracting them into the "custom-iso_v1" folder while preserving all the metadata.
+
+## Copy your cutom ks.cfg, grub.cfg, and isolinux.cfg to their corresponding directories.
+
+# Example:
+cp -a ks.cfg /root/custom-iso_v1/.
+cp -a grub.cfg /root/custom-iso_v1/EFI/BOOT/.
+cp -a isolinux.cfg /root/custom-iso_v1/isolinux/.
+
+# NOTE: Ensure that the isolinux.cfg contains the proper path to the ks.cfg file, the same goes for the grub.cfg.
+
+## Create the custom ks iso file
+
+cd /root/custom-iso_v1
+mkisofs -o ../NAME_OF_CUSTOM_ISO.iso -b isolinux/isolinux.bin -c isolinux/boot.cat -no-emul-boot -boot-load-size 4 -boot-info-table -eltorito-alt-boot -graft-points -joliet-long -e images/efiboot.img -J -R -l -V "RHEL-9-3-0-BaseOS-x86_64" .
+
+# NOTE: There's a " . " at the end of the mkisofs command above.
+# NOTE: Change the -V "RHEL-9-3-0-BaseOS-x86_64" volume lable to your specific version of rhel you're creating. This has to match what's in your isolinux.cfg and grub.cfg files.
+
