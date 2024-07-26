@@ -1,0 +1,119 @@
+---
+- name: Create Kickstart from current system
+  hosts: target_system<------------ CHANGE  THIS TO WHAT IS IN YOUR HOST FILE
+  become: yes
+  vars:
+    kickstart_file: /tmp/anaconda-ks.cfg
+
+  tasks:
+    - name: Ensure python3 and python3-libs are installed
+      yum:
+        name:
+          - python3
+          - python3-libs
+        state: present
+
+    - name: Create a directory for Kickstart and script
+      file:
+        path: /tmp/kickstart_files
+        state: directory
+        mode: '0755'
+
+    - name: Create a script to generate Kickstart file
+      copy:
+        dest: /tmp/kickstart_files/generate_ks.py
+        content: |
+          #!/usr/bin/env python3
+          import os
+          import subprocess
+
+          kickstart_file = '/tmp/anaconda-ks.cfg'
+
+          def generate_partitioning():
+              partitions = subprocess.check_output(
+                  'lsblk -f -o NAME,FSTYPE,LABEL,UUID,MOUNTPOINT,SIZE', shell=True
+              ).decode('utf-8')
+              lines = partitions.strip().split('\n')[1:]
+              kickstart = '\npart / --fstype="ext4" --size=1 --grow\n'
+              for line in lines:
+                  fields = line.split()
+                  if len(fields) == 6:
+                      name, fstype, label, uuid, mountpoint, size = fields
+                      if mountpoint and fstype and mountpoint not in ['/']:
+                          kickstart += f'part {mountpoint} --fstype="{fstype}" --label="{label}" --uuid={uuid} --size=1 --grow\n'
+              return kickstart
+
+          def generate_network():
+              network = subprocess.check_output(
+                  'nmcli device show', shell=True
+              ).decode('utf-8')
+              devices = network.split('\n\n')
+              kickstart = ''
+              for device in devices:
+                  if 'GENERAL.DEVICE:' in device:
+                      lines = device.split('\n')
+                      dev_name = [line.split(':')[1].strip() for line in lines if line.startswith('GENERAL.DEVICE')][0]
+                      ip4 = [line.split(':')[1].strip() for line in lines if line.startswith('IP4.ADDRESS[1]')]
+                      if ip4:
+                          ip4 = ip4[0].split('/')[0]
+                          kickstart += f'network --device={dev_name} --bootproto=static --ip={ip4} --activate\n'
+                      else:
+                          kickstart += f'network --device={dev_name} --bootproto=dhcp --activate\n'
+              return kickstart
+
+          def generate_root_password():
+              password = subprocess.check_output(
+                  'cat /etc/shadow | grep root', shell=True
+              ).decode('utf-8').split(':')[1]
+              return f'rootpw --iscrypted {password}\n'
+
+          def generate_packages():
+              packages = subprocess.check_output(
+                  'rpm -qa --qf "%{NAME}\n"', shell=True
+              ).decode('utf-8').strip().split('\n')
+              return '\n'.join(packages) + '\n'
+
+          def generate_kickstart():
+              with open(kickstart_file, 'w') as ks:
+                  ks.write('install\n')
+                  ks.write('text\n')
+                  ks.write('lang en_US.UTF-8\n')
+                  ks.write('keyboard us\n')
+                  ks.write('timezone UTC\n')
+                  ks.write('auth --useshadow --passalgo=sha512\n')
+                  ks.write(generate_root_password())
+                  ks.write('selinux --enforcing\n')
+                  ks.write('firewall --enabled --service=ssh\n')
+                  ks.write('bootloader --location=mbr\n')
+                  ks.write(generate_partitioning())
+                  ks.write(generate_network())
+                  ks.write('reboot\n')
+                  ks.write('%packages\n')
+                  ks.write(generate_packages())
+                  ks.write('%end\n')
+
+          generate_kickstart()
+
+    - name: Ensure the script is executable
+      file:
+        path: /tmp/kickstart_files/generate_ks.py
+        mode: '0755'
+
+    - name: Run the script to generate the Kickstart file
+      command: /tmp/kickstart_files/generate_ks.py
+
+    - name: Transfer the Kickstart file to control node
+      fetch:
+        src: "{{ kickstart_file }}"
+        dest: ./generated-kickstart.cfg
+        flat: yes
+
+    - name: Clean up temporary files
+      file:
+        path: /tmp/kickstart_files
+        state: absent
+
+    - name: Remove the generated Kickstart file from the target
+      file:
+        path: "{{ kickstart_file }}"
+        state: absent
