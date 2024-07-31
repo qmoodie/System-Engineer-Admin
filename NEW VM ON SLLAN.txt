@@ -12,6 +12,7 @@ Chnage hostname
   On Windows
   - sysdm.cpl 
   - computer name/change
+  - restart system
 
 Change IP 
   - nmcli connection modify [adapter] ipv4.address [ip/CIDR]
