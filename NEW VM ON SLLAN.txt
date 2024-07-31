@@ -9,9 +9,17 @@ Chnage hostname
   - reboot 
   - verify prompt changed 
 
+  On Windows
+  - sysdm.cpl 
+  - computer name/change
+
 Change IP 
   - nmcli connection modify [adapter] ipv4.address [ip/CIDR]
   - nmcli connection modfy [adapter] ipv4.gateway [gateway]
+  On Windows 
+   - netsh interface ipv4 show config (to get the interface)
+   - netsh interface ipv4 set address name="interface name"  static ip_address submask_net default_gateway
+
 
 Add to ansible host file 
   - gitlab/hosts/edit file
